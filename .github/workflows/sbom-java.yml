@@ -2,7 +2,9 @@ name: Generate SBOM for Java (Maven)
 
 on:
   workflow_call:
-
+    secrets:
+      GH_TOKEN:
+        required: true
 jobs:
   generate-sbom:
     name: Java SBOM Generation
