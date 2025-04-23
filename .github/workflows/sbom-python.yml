@@ -2,6 +2,9 @@ name: Generate SBOM for Python
 
 on:
   workflow_call:
+    secrets:
+      GH_TOKEN:
+        required: true
     inputs:
       python-version:
         description: 'Python version to use'
