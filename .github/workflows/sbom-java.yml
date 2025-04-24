@@ -2,15 +2,23 @@ name: Generate SBOM for Java (Maven)
 
 on:
   workflow_call:
+    inputs:
+      sbom_name:
+        description: 'Name der SBOM-Datei (ohne .json)'
+        required: false
+        default: 'sbom'
+        type: string
     secrets:
       GH_TOKEN:
         required: true
+
 jobs:
   generate-sbom:
     name: Java SBOM Generation
     runs-on: ubuntu-latest
     env:
        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,17 +30,18 @@ jobs:
           java-version: '17'
 
       - name: Generate SBOM with CycloneDX Maven Plugin
-        run: mvn org.cyclonedx:cyclonedx-maven-plugin:2.7.9:makeAggregateBom \
-             -Dcyclonedx.outputFormat=json \
-             -Dcyclonedx.outputName=sbom
+        run: |
+          mvn org.cyclonedx:cyclonedx-maven-plugin:2.7.9:makeAggregateBom \
+              -Dcyclonedx.outputFormat=json \
+              -Dcyclonedx.outputName=${{ inputs.sbom_name }}
 
       - name: Upload SBOM to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/sbom.json
+          files: ${{ inputs.sbom_name }}.json
 
       - name: Upload SBOM as Artifact
         uses: actions/upload-artifact@v4
         with:
           name: sbom-java
-          path: target/sbom.json
+          path: ${{ inputs.sbom_name }}.json
