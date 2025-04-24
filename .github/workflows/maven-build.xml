@@ -1,0 +1,77 @@
+name: Maven Build
+
+on:
+  workflow_call:
+    inputs:
+      java_version:
+        description: 'Java version to use (e.g. 17, 21)'
+        required: false
+        default: '21'
+        type: string
+
+jobs:
+  find-poms:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find all pom.xml files
+        id: set-matrix
+        run: |
+          echo "🔍 Searching for pom.xml files..."
+          POMS=$(find . -name 'pom.xml' ! -path './target/*' ! -path './**/node_modules/*')
+          echo "$POMS"
+
+          MATRIX=$(echo "$POMS" | sed 's|/pom.xml||' | jq -R . | jq -s '{path: .}')
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  maven-test:
+    needs: find-poms
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.find-poms.outputs.matrix) }}
+    name: Test ${{ matrix.path }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.path }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ inputs.java_version }}
+
+      - name: Run Maven verify
+        run: mvn verify
+
+      - name: Upload test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-${{ matrix.path }}
+          path: |
+            target/site/jacoco/index.html
+            target/*-src.zip
+            pom.xml
+          if-no-files-found: warn
+
+  security-scan:
+    needs: find-poms
+    runs-on: ubuntu-latest
+    strategy:
+      matrix: ${{ fromJson(needs.find-poms.outputs.matrix) }}
+    name: Security scan ${{ matrix.path }}
+    defaults:
+      run:
+        working-directory: ${{ matrix.path }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
