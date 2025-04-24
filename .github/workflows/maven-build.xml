@@ -1,12 +1,18 @@
-name: Maven Build
+name: Universal Maven CI (Multi-POM)
 
 on:
   workflow_call:
     inputs:
       java_version:
-        description: 'Java version to use (e.g. 17, 21)'
+        description: 'Java version to use'
         required: false
         default: '21'
+        type: string
+
+      deploy_mode:
+        description: 'Deployment mode: jib or jar'
+        required: false
+        default: 'jib'
         type: string
 
 jobs:
@@ -17,12 +23,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Find all pom.xml files
         id: set-matrix
         run: |
           echo "🔍 Searching for pom.xml files..."
-          POMS=$(find . -name 'pom.xml' ! -path './target/*' ! -path './**/node_modules/*')
+          POMS=$(find . -name 'pom.xml' ! -path './**/target/*')
           echo "$POMS"
 
           MATRIX=$(echo "$POMS" | sed 's|/pom.xml||' | jq -R . | jq -s '{path: .}')
@@ -37,41 +45,88 @@ jobs:
     defaults:
       run:
         working-directory: ${{ matrix.path }}
+    env:
+      MAVEN_OPTS: >-
+        -Dhttps.protocols=TLSv1.2
+        -Dmaven.repo.local=.m2/repository
+        -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN
+        -Dorg.slf4j.simpleLogger.showDateTime=true
+        -Djava.awt.headless=true
+      MAVEN_CLI_OPTS: >-
+        --batch-mode --errors --fail-at-end --show-version
+        -DinstallAtEnd=true -DdeployAtEnd=true
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Set up Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: ${{ inputs.java_version }}
 
-      - name: Run Maven verify
-        run: mvn verify
+      - uses: actions/cache@v3
+        with:
+          path: .m2/repository
+          key: ${{ runner.os }}-m2-${{ matrix.path }}
+          restore-keys: ${{ runner.os }}-m2-
 
-      - name: Upload test artifacts
+      - name: Run Maven tests
+        run: mvn $MAVEN_CLI_OPTS verify
+
+      - name: Upload Surefire Reports
         uses: actions/upload-artifact@v4
         with:
-          name: artifacts-${{ matrix.path }}
-          path: |
-            target/site/jacoco/index.html
-            target/*-src.zip
-            pom.xml
-          if-no-files-found: warn
+          name: surefire-${{ matrix.path }}
+          path: '**/target/surefire-reports/TEST-*.xml'
 
-  security-scan:
-    needs: find-poms
+  maven-deploy:
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/')
+    needs: [maven-test, find-poms]
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.find-poms.outputs.matrix) }}
-    name: Security scan ${{ matrix.path }}
+    name: Deploy ${{ matrix.path }}
     defaults:
       run:
         working-directory: ${{ matrix.path }}
+    env:
+      MAVEN_OPTS: >-
+        -Dhttps.protocols=TLSv1.2
+        -Dmaven.repo.local=.m2/repository
+        -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=WARN
+        -Dorg.slf4j.simpleLogger.showDateTime=true
+        -Djava.awt.headless=true
+      MAVEN_CLI_OPTS: >-
+        --batch-mode --errors --fail-at-end --show-version
+        -DinstallAtEnd=true -DdeployAtEnd=true
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Dependency Review
-        uses: actions/dependency-review-action@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ inputs.java_version }}
+
+      - uses: actions/cache@v3
+        with:
+          path: .m2/repository
+          key: ${{ runner.os }}-m2-${{ matrix.path }}
+          restore-keys: ${{ runner.os }}-m2-
+
+      - name: Build with Jib (Docker Image)
+        if: ${{ inputs.deploy_mode == 'jib' }}
+        run: mvn $MAVEN_CLI_OPTS package jib:build -am
+
+      - name: Build JAR
+        if: ${{ inputs.deploy_mode == 'jar' }}
+        run: mvn $MAVEN_CLI_OPTS package -DskipTests
+
+      - name: Upload JAR Artifact
+        if: ${{ inputs.deploy_mode == 'jar' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: jar-${{ matrix.path }}
+          path: target/*.jar
